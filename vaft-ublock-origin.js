@@ -1,4 +1,3 @@
-twitch-videoad.js text/javascript
 (function() {
     if ( /(^|\.)twitch\.tv$/.test(document.location.hostname) === false ) { return; }
     // Skip injection in nested frames that aren't legitimate Twitch embed contexts.
@@ -2240,7 +2239,8 @@ twitch-videoad.js text/javascript
         // Matched ONLY on the Amazon ad-CDN host. That is the safety property: the live stream is
         // fed by MediaSource and always carries a blob: URL, so the primary player can never match
         // this test. The player-owned element is skipped as a second, independent guard.
-        // Muted + paused as well as hidden — a display:none <video> still plays audio (TTV-AB v12.0.7).
+        // Paused as well as hidden — a display:none <video> still plays audio (TTV-AB v12.0.7).
+        // Deliberately do not mute any video element in this ad guard.
         const primaryVideo = playerForMonitoringBuffering?.player?.getHTMLVideoElement?.();
         const allVideos = document.getElementsByTagName('video');
         for (let i = 0; i < allVideos.length; i++) {
@@ -2259,7 +2259,7 @@ twitch-videoad.js text/javascript
                 // Re-assert every tick rather than marking once: a React re-render can drop the
                 // inline style while keeping the element, and a one-shot marker would never re-hide it.
                 vid.style.setProperty('display', 'none', 'important');
-                try { vid.muted = true; if (!vid.paused) vid.pause(); } catch {}
+                try { if (!vid.paused) vid.pause(); } catch {}
                 if (!vid.dataset.tasAdHidden) {
                     // '1', not '': dataset returns the empty string as-is, which is falsy —
                     // the dedup, the restore branch and getPlayerVideoElement() would all misread it.
@@ -2499,12 +2499,16 @@ twitch-videoad.js text/javascript
             let currentPersistenceLS = null;
             try {
                 currentQualityLS = localStorage.getItem(lsKeyQuality);
-                currentMutedLS = localStorage.getItem(lsKeyMuted);
+                // Force Twitch's persisted mute preference to OFF during player recovery.
+                // This intentionally overrides a saved muted=true value after ad/player reloads.
+                currentMutedLS = JSON.stringify({ default: false });
+                localStorage.setItem(lsKeyMuted, currentMutedLS);
                 currentVolumeLS = localStorage.getItem(lsKeyVolume);
                 currentLowLatencyLS = localStorage.getItem(lsKeyLowLatency);
                 currentPersistenceLS = localStorage.getItem(lsKeyPersistence);
                 if (localStorageHookFailed && player?.core?.state) {
-                    localStorage.setItem(lsKeyMuted, JSON.stringify({default:player.core.state.muted}));
+                    // Do not copy player.core.state.muted into storage: it may contain a
+                    // stale mute state from Twitch's player teardown. Preserve volume only.
                     localStorage.setItem(lsKeyVolume, player.core.state.volume);
                 }
                 if (player?.core?.state?.quality?.group) {
@@ -2546,7 +2550,7 @@ twitch-videoad.js text/javascript
                     const shouldRecover = playerBufferState.vaftEverUnmuted && RecoverFromSilentMute;
                     if (v && (wasInitiallyUnmuted || shouldRecover)) {
                         if (wasInitiallyUnmuted) {
-                           // v.muted = true;
+                            // v.muted = true; // Temporarily disabled for Firefox PiP mute testing.
                         }
                         // Multi-event restore: Edge fires loadeddata/playing independently of
                         // canplay; first-fired wins via the idempotent `done` guard.
@@ -2646,12 +2650,14 @@ twitch-videoad.js text/javascript
                             localStorage.setItem(lsKeyPersistence, currentPersistenceLS);
                         }
                         const videos = document.getElementsByTagName('video');
-                        // Respect user's mute intent: only force-unmute if LS didn't say mute.
-                        // Twitch writes video-muted as '{"default":true}' when user muted via UI;
-                        // Chrome autoplay policy can mute even if user didn't (no LS signal).
-                        const userIntendedMute = currentMutedLS && currentMutedLS.includes('"default":true');
-                        if (videos.length > 0 && videos[0].muted && !userIntendedMute) {
-                            videos[0].muted = false;
+                        // This recovery mode intentionally overrides the saved mute flag.
+                        // A saved {default:true} can otherwise re-mute Firefox PiP after a reload.
+                        // Target Twitch's actual player video, not videos[0] (which can be an ad video).
+                        const restoredVideo = getPlayerVideoElement();
+                        if (restoredVideo && restoredVideo.muted) {
+                            restoredVideo.muted = false;
+                            playerBufferState.vaftEverUnmuted = true;
+                            console.log('[AD DEBUG] Post-reload audio recovery — forced Twitch player video unmuted.');
                         }
                         // Correct live drift after reload.
                         // For hard reload with large drift (>5s), hard-seek to live edge to flush
@@ -2814,7 +2820,6 @@ twitch-videoad.js text/javascript
         try {
             const keysToCache = [
                 'video-quality',
-                'video-muted',
                 'volume',
                 'lowLatencyModeEnabled',// Low Latency
                 'persistenceEnabled',// Mini Player
@@ -2952,5 +2957,3 @@ twitch-videoad.js text/javascript
     };
 })();
 
-GoodCharles/twitch-adsolution
-https://github.com/GoodCharles/twitch-adsolution
